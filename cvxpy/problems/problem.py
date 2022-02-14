@@ -46,7 +46,7 @@ from cvxpy.reductions.solvers.defines import SOLVER_MAP_CONIC, SOLVER_MAP_QP
 from cvxpy.reductions.solvers.qp_solvers.qp_solver import QpSolver
 from cvxpy.reductions.solvers.solver import Solver
 from cvxpy.reductions.solvers.solving_chain import (SolvingChain,
-                                                    construct_solving_chain,)
+                                                    construct_solving_chain)
 from cvxpy.settings import SOLVERS
 from cvxpy.utilities.deterministic import unique_list
 
@@ -472,6 +472,8 @@ class Problem(u.Canonical):
             solve_func = Problem.REGISTERED_SOLVE_METHODS[func_name]
         else:
             solve_func = Problem._solve
+
+        solvers = kwargs.pop("solvers", None)
         return solve_func(self, *args, **kwargs)
 
     @classmethod
@@ -578,6 +580,7 @@ class Problem(u.Canonical):
         """
         start = time.time()
         key = self._cache.make_key(solver, gp)
+        print(f"Begin get_problem_data, solver={solver}, key={key}")
         if key != self._cache.key:
             self._cache.invalidate()
             solving_chain = self._construct_chain(
@@ -610,6 +613,7 @@ class Problem(u.Canonical):
                         old_params_to_new_params[param].value = np.log(
                             param.value)
 
+            print(f"  solving_chain.solver.apply, solver={solver}")
             data, solver_inverse_data = solving_chain.solver.apply(
                 self._cache.param_prog)
             inverse_data = self._cache.inverse_data + [solver_inverse_data]
@@ -647,6 +651,7 @@ class Problem(u.Canonical):
                 # the last datum in inverse_data corresponds to the solver,
                 # so we shouldn't cache it
                 self._cache.inverse_data = inverse_data[:-1]
+        print(f"End get_problem_data, solver={solver}, solving_chain={solving_chain}")
         return data, solving_chain, inverse_data
 
     def _find_candidate_solvers(self,
@@ -681,9 +686,21 @@ class Problem(u.Canonical):
             Raised if the problem is not DCP and `gp` is False.
         cvxpy.error.DGPError
             Raised if the problem is not DGP and `gp` is True.
+
+        >>> x = Variable()
+        >>> problem = Problem(objective = Maximize(2*x+(x-1)), constraints=[x <= 2])
+        >>> problem._find_candidate_solvers()
+        {'qp_solvers': ['OSQP'], 'conic_solvers': ['ECOS', 'SCIPY', 'SCS']}
+        >>> problem._find_candidate_solvers(solver="OSQP")
+        {'qp_solvers': ['OSQP'], 'conic_solvers': []}
+        >>> problem._find_candidate_solvers(gp=True)
+        {'qp_solvers': [], 'conic_solvers': ['ECOS', 'SCIPY', 'SCS']}
+        >>> problem._find_candidate_solvers(gp=True, solver='SCIPY')
+        {'qp_solvers': [], 'conic_solvers': ['SCIPY']}
         """
         candidates = {'qp_solvers': [],
                       'conic_solvers': []}
+        # print(f"Begin _find_candidate_solvers, solver={solver}")
         if isinstance(solver, Solver):
             return self._add_custom_solver_candidates(solver)
 
@@ -744,6 +761,7 @@ class Problem(u.Canonical):
                     (candidates['qp_solvers'] +
                      candidates['conic_solvers']))
 
+        # print(f"End _find_candidate_solvers, solver={solver}, candidates={candidates}")
         return candidates
 
     def _add_custom_solver_candidates(self, custom_solver: Solver):
@@ -806,8 +824,10 @@ class Problem(u.Canonical):
         -------
         A solving chain
         """
+        print(f"Begin _construct_chain, solver={solver}")
         candidate_solvers = self._find_candidate_solvers(solver=solver, gp=gp)
         self._sort_candidate_solvers(candidate_solvers)
+        print(f"End _construct_chain, solver={solver}, candidate_solvers={candidate_solvers}")
         return construct_solving_chain(self, candidate_solvers, gp=gp,
                                        enforce_dpp=enforce_dpp)
 
@@ -895,6 +915,7 @@ class Problem(u.Canonical):
                     "associated with it; all Parameter objects must have "
                     "values before solving a problem." % parameter.name())
 
+        print(f"Begin _solve, solver={solver}")
         if verbose:
             n_variables = sum(np.prod(v.shape) for v in self.variables())
             n_parameters = sum(np.prod(p.shape) for p in self.parameters())
@@ -921,6 +942,7 @@ class Problem(u.Canonical):
                     'invoke a numerical solver to obtain a solution.')
 
         if requires_grad:
+            print(f"  requires_grad, solver={solver}")
             dpp_context = 'dgp' if gp else 'dcp'
             if qcp:
                 raise ValueError("Cannot compute gradients of DQCP problems.")
@@ -940,6 +962,7 @@ class Problem(u.Canonical):
             else:
                 solver = s.DIFFCP
         else:
+            print(f"  not requires_grad, solver={solver}")
             if gp and qcp:
                 raise ValueError("At most one of `gp` and `qcp` can be True.")
             if qcp and not self.is_dcp():
@@ -960,6 +983,7 @@ class Problem(u.Canonical):
                     if low is not None:
                         kwargs["high"] = low * -1
                 chain = Chain(problem=self, reductions=reductions)
+                print(f"  bisection.bisect, solver={solver}")
                 soln = bisection.bisect(
                     chain.reduce(), solver=solver, verbose=verbose, **kwargs)
                 self.unpack(chain.retrieve(soln))
